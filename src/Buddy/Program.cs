@@ -1,50 +1,48 @@
 using System.ClientModel;
 using Buddy;
 using Microsoft.Extensions.AI;
-using Microsoft.Extensions.Options;
 using ModelContextProtocol.Server;
 using OpenAI;
-using OpenAI.Chat;
+using OpenAI.Responses;
 using Serilog;
 using Serilog.Formatting.Compact;
+
+var builder = WebApplication.CreateBuilder(args);
 
 Log.Logger = new LoggerConfiguration()
     .Enrich.FromLogContext()
     .WriteTo.Console(new CompactJsonFormatter())
     .CreateLogger();
 
-var builder = WebApplication.CreateBuilder(args);
-
 builder.Logging.ClearProviders();
 builder.Host.UseSerilog();
+
 builder.Configuration.Sources.Clear();
 builder.Configuration
     .AddJsonFile("appsettings.json")
     .AddEnvironmentVariables()
     .AddCommandLine(args);
-builder.Services.Configure<AIOptions>(opt =>
-{
-    opt.OpenAIUrl = builder.Configuration.GetValue<string>("OpenAIUrl");
-    opt.OpenAIModel = builder.Configuration.GetValue<string>("OpenAIModel");
-    opt.OpenAIApiKey = builder.Configuration.GetValue<string>("OpenAIApiKey");
-    opt.OpenAIPrompt = builder.Configuration.GetValue<string>("OpenAIPrompt");
-});
-builder.Services.AddChatClient(provider =>
-{
-    var options = provider.GetRequiredService<IOptions<AIOptions>>();
 
-    return new ChatClient(
-        options.Value.OpenAIModel,
-        new ApiKeyCredential(options.Value.OpenAIApiKey),
-        new OpenAIClientOptions
-        {
-            Endpoint = new Uri(options.Value.OpenAIUrl),
-            NetworkTimeout = Timeout.InfiniteTimeSpan
-        }).AsIChatClient();
-}).UseLogging();
-
+var openAIUrl = builder.Configuration.GetValue<string>("OpenAIUrl");
+var openAIModel = builder.Configuration.GetValue<string>("OpenAIModel");
+var openAIApiKey = builder.Configuration.GetValue<string>("OpenAIApiKey");
+var openAIPrompt = builder.Configuration.GetValue<string>("OpenAIPrompt");
+var toolApiKey = builder.Configuration.GetValue<string>("ToolApiKey");
 var toolDescription = builder.Configuration.GetValue<string>("ToolDescription");
 var promptDescription = builder.Configuration.GetValue<string>("PromptDescription");
+
+builder.Services.AddChatClient(provider =>
+{
+    #pragma warning disable OPENAI001
+    return new ResponsesClient(
+        new ApiKeyCredential(openAIApiKey), 
+        new ResponsesClientOptions
+        {
+            Endpoint = new Uri(new Uri(openAIUrl), "v1/"),
+            NetworkTimeout = Timeout.InfiniteTimeSpan
+        }).AsIChatClient(openAIModel);
+    #pragma warning restore OPENAI001
+}).UseLogging();
 
 builder.Services
     .AddMcpServer()
@@ -59,14 +57,13 @@ builder.Services
             }
         });
     })
-    .WithTools([(McpServerTool.Create(async (string prompt, CancellationToken token ) =>
+    .WithTools([(McpServerTool.Create(async (string prompt, CancellationToken token) =>
     {
         var client = Provider.Current.GetRequiredService<IChatClient>();
-        var options = Provider.Current.GetRequiredService<IOptions<AIOptions>>();
 
         var response = await client.GetResponseAsync(prompt, new ChatOptions
         {
-            Instructions = options.Value.OpenAIPrompt
+            Instructions = openAIPrompt
         }, token);
 
         return response.Text;
@@ -93,9 +90,7 @@ app.Use(async (context, next) =>
     var currentToken = auth?.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) == true
         ? auth.Substring(7).Trim()
         : null;
-    var configuration = context.RequestServices.GetRequiredService<IConfiguration>();
-    var expectedToken = configuration.GetValue<string>("ToolApiKey");
-    var isValid = string.IsNullOrWhiteSpace(expectedToken) || string.Equals(expectedToken, currentToken, StringComparison.Ordinal);
+    var isValid = string.IsNullOrWhiteSpace(toolApiKey) || string.Equals(toolApiKey, currentToken, StringComparison.Ordinal);
 
     if (isValid)
     {

@@ -30,3 +30,6 @@ Then just call for example:
 ```bash
 curl -X POST http://localhost:8080 -H "Content-Type: application/json" -d '{ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }'
 ```
+
+**Notes**
+- It uses *responses* OpenAI api for model engine communication.
